@@ -69,27 +69,30 @@ void your_reduce(rmm::device_uvector<int>& buffer,
     int size = buffer.size();
 
     unsigned int NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
-    rmm::device_uvector<int> block_total(NBLOCKS, buffer.stream());
-    
+    rmm::device_uvector<int> block_total_in(NBLOCKS, buffer.stream());
+    rmm::device_uvector<int> block_total_out(NBLOCKS, buffer.stream());
+
 
     bool first_done = false;
 
     while (size > MAX_SIZE_LAST_REDUCE){
 
         kernel_your_reduce<int><<<NBLOCKS, BLOCK_SIZE, BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
-            raft::device_span<const int>((first_done) ? block_total.data():buffer.data(), (first_done) ? block_total.size():buffer.size()),
-            raft::device_span<int>(block_total.data(), block_total.size()),
+            raft::device_span<const int>((first_done) ? block_total_in.data():buffer.data(), (first_done) ? block_total_in.size():buffer.size()),
+            raft::device_span<int>(block_total_out.data(), block_total_out.size()),
             size);
 
             size = NBLOCKS;
             NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
             first_done = true;
+
+            std::swap(block_total_out, block_total_in);
     }
 
     unsigned int size_last_reduce = (size%2==0) ? size:size+1;
 
     kernel_your_reduce<int><<<1, size_last_reduce, size_last_reduce*sizeof(int), buffer.stream()>>>(
-        raft::device_span<int>(first_done ? block_total.data():buffer.data(), first_done ? block_total.size():buffer.size()),
+        raft::device_span<int>(first_done ? block_total_in.data():buffer.data(), first_done ? block_total_in.size():buffer.size()),
         raft::device_span<int>(total.data(), 1),
         size);
 
