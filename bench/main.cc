@@ -22,29 +22,52 @@ int main(int argc, char** argv)
     // Benchmarks registration
     Fixture fx;
     {
-        // Add the sizes to benchmark here
-        // Start with 1 block of 64 (block reduce)
-        // Then 2 blocks of 64 each (grid reduce)
-        // Then and odd size
-        // Finally the true sizes
-        // TODO
+        //Sizes to check correctness
         constexpr std::array sizes = {
+            31,
+            32,
+            33,
+            63,
             64,
+            65,
+            127,
             128,
-            256,
-            128+32,
             129,
-            524288,
-            1048576
+            255,
+            256,
+            257,
+            511,
+            512,
+            513,
+            1023,
+            1024,
+            1025, //Forced to cascade
+            1024*2, 
+            1024*3,
+            1024*1025,
+            1048576,
+            1048576*1,
+            1048576*2,
+            1048576*3,
+            1048576*4,
+            1048576*10
         };
 
         // Add the name and function to benchmark here
         // TODO
         constexpr std::tuple reduce_to_bench{
-            //"Baseline_reduce",
-            //&baseline_reduce,
-            "Your_reduce",
-            &your_reduce,
+            // "baseline_reduce",
+            // &baseline_reduce,
+             "base",
+             &base,
+            // "less_warp_divergence",
+            // &less_warp_divergence,
+            // "no_bank_conflict",
+            // &no_bank_conflict,
+            //"more_work_per_thread",
+            //&more_work_per_thread, 
+            //"unroll_last_warp",
+            //&unroll_last_warp,
         };
 
         //  / 2 because we store name + function pointer
