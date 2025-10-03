@@ -50,14 +50,14 @@ int main(int argc, char** argv)
             1048576*2,
             1048576*3,
             1048576*4,
-            1048576*10
+            1048576*5,
         };
 
         // Add the name and function to benchmark here
         // TODO
         constexpr std::tuple reduce_to_bench{
-            // "baseline_reduce",
-            // &baseline_reduce,
+            //"baseline_reduce",
+            //&baseline_reduce,
              "base",
              &base,
             // "less_warp_divergence",

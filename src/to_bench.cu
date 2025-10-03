@@ -8,13 +8,18 @@
 #include <rmm/device_scalar.hpp>
 
 //Block size for the first reduction loop
-constexpr unsigned int BLOCK_SIZE = 1024;
-
+constexpr unsigned int BLOCK_SIZE = 256;
 //We stop the cascade when whe have BLOCK_SIZE elements left or less
 const unsigned int MAX_SIZE_LAST_REDUCE = BLOCK_SIZE;
-
 //For clarity
 constexpr unsigned int WARP_SIZE = 32;
+
+__global__ void kernel_print(raft::device_span<int> buffer, int size)
+{
+    unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
+    if (tid > size) return;
+    printf("i = %u, value = %d\n", tid, static_cast<int>(buffer[tid]));
+}
 
 // template <typename T>
 // __global__
@@ -42,14 +47,19 @@ void kernel_base(raft::device_span<const T> buffer, raft::device_span<T> block_t
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
     unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
-    
+
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
-    sdata[tid] = (i >= size) ? 0:buffer[i];
+    sdata[tid] = (i < size) ? buffer[i]:0;
     __syncthreads();
 
     for (int s=1; s<blockDim.x; s*=2){
         if (tid%(2*s)==0){
+            assert((tid+s<blockDim.x)); // Check not out of bound
             sdata[tid] += sdata[tid+s];
         }
         __syncthreads();
@@ -144,14 +154,15 @@ void kernel_base(raft::device_span<const T> buffer, raft::device_span<T> block_t
 //     if (tid==0) block_total[blockIdx.x]=sdata[0];
 // }
 
-
-
 template <typename KernelFunc, typename T>
 void reduce_template( KernelFunc kernel,
                  rmm::device_uvector<T>& buffer,
                  rmm::device_scalar<T>& total)
 {
     int size = buffer.size();
+
+    assert(BLOCK_SIZE<=1024);
+    assert(BLOCK_SIZE%WARP_SIZE==0);
 
     //Number of blocks to touch the whole array
     unsigned int NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
@@ -186,15 +197,23 @@ void reduce_template( KernelFunc kernel,
         std::swap(block_total_out, block_total_in);
     }
 
+    assert(size<=1024); 
+    assert(size<=MAX_SIZE_LAST_REDUCE); 
 
-    //The last reduction must be done on a even size, even if we have an odd amount of values to reduce
-    //The kernel will safely fill out of bound values with 0 in the shared memory
-    unsigned int size_last_reduce = (size%2==0) ? size:size+1;
+    //if (buffer.size()==513) kernel_print<<<1,size>>>(raft::device_span<int>(block_total_in.data(), block_total_in.size()), size);
 
-    //We launch 1 block of size size_last_reduce
+    //Le dessin marche que si la taille de bloc est une puissance de 2. On veut la puissance de 2 la plus petite qui est > size
+    unsigned int block_size_last_reduce = 1;
+    while (block_size_last_reduce < size) block_size_last_reduce*=2;
+    
+    assert(block_size_last_reduce<=1024); //Pas plus gros que max
+    assert(block_size_last_reduce<=MAX_SIZE_LAST_REDUCE); //Pas plus gros que la taille max qu'on s'est fixés
+    assert((block_size_last_reduce & (block_size_last_reduce - 1)) == 0); //Puissance de 2
+
+    //We launch 1 block of size block_size_last_reduce
     //We check if we performed one cascade, because if we did not, we need to input buffer, not block_total_in 
     //the last output of the cascade
-    kernel<<<1, size_last_reduce, size_last_reduce*sizeof(int), buffer.stream()>>>(
+    kernel<<<1, block_size_last_reduce, block_size_last_reduce*sizeof(int), buffer.stream()>>>(
         raft::device_span<int>(first_done ? block_total_in.data():buffer.data(), first_done ? block_total_in.size():buffer.size()),
         raft::device_span<int>(total.data(), 1),
         size);
@@ -208,22 +227,22 @@ void base(rmm::device_uvector<int>& buffer,
     reduce_template(kernel_base<int>,buffer, total);
 }
 
-void less_warp_divergence(rmm::device_uvector<int>& buffer,
-           rmm::device_scalar<int>& total){
-    reduce_template(kernel_less_warp_divergence<int>,buffer, total);
-}
+// void less_warp_divergence(rmm::device_uvector<int>& buffer,
+//            rmm::device_scalar<int>& total){
+//     reduce_template(kernel_less_warp_divergence<int>,buffer, total);
+// }
 
-void no_bank_conflict(rmm::device_uvector<int>& buffer,
-           rmm::device_scalar<int>& total){
-    reduce_template(kernel_no_bank_conflict<int>,buffer, total);
-}
+// void no_bank_conflict(rmm::device_uvector<int>& buffer,
+//            rmm::device_scalar<int>& total){
+//     reduce_template(kernel_no_bank_conflict<int>,buffer, total);
+// }
 
-void more_work_per_thread(rmm::device_uvector<int>& buffer,
-           rmm::device_scalar<int>& total){
-    reduce_template(kernel_more_work_per_thread<int>,buffer, total);
-}
+// void more_work_per_thread(rmm::device_uvector<int>& buffer,
+//            rmm::device_scalar<int>& total){
+//     reduce_template(kernel_more_work_per_thread<int>,buffer, total);
+// }
 
-void unroll_last_warp(rmm::device_uvector<int>& buffer,
-           rmm::device_scalar<int>& total){
-    reduce_template(kernel_unroll_last_warp<int>, buffer, total);
-}
+// void unroll_last_warp(rmm::device_uvector<int>& buffer,
+//            rmm::device_scalar<int>& total){
+//     reduce_template(kernel_unroll_last_warp<int>, buffer, total);
+// }
