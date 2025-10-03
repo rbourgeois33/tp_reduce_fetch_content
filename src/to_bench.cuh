@@ -9,7 +9,6 @@ void baseline_reduce(rmm::device_uvector<int>& buffer,
 void base(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
 
-
 void less_warp_divergence(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
 
