@@ -20,3 +20,6 @@ void more_work_per_thread(rmm::device_uvector<int>& buffer,
 
 void unroll_last_warp(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
+
+void complete_unroll(rmm::device_uvector<int>& buffer,
+          rmm::device_scalar<int>& total);

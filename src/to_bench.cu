@@ -21,28 +21,8 @@ __global__ void kernel_print(raft::device_span<int> buffer, int size)
     printf("i = %u, value = %d\n", tid, static_cast<int>(buffer[tid]));
 }
 
-// template <typename T>
-// __global__
-// void kernel_reduce_baseline(raft::device_span<const T> buffer, raft::device_span<T> total)
-// {
-//     for (int i = 0; i < buffer.size(); ++i)
-//         *total.data() += buffer[i];
-// }
-
-// void baseline_reduce(rmm::device_uvector<int>& buffer,
-//                      rmm::device_scalar<int>& total)
-// {
-// 	kernel_reduce_baseline<int><<<1, 1, 0, buffer.stream()>>>(
-//         raft::device_span<int>(buffer.data(), buffer.size()),
-//         raft::device_span<int>(total.data(), 1));
-
-//     CUDA_CHECK_ERROR(cudaStreamSynchronize(buffer.stream()));
-// }
-
-
-template <typename T>
 __global__
-void kernel_base(raft::device_span<const T> buffer, raft::device_span<T> block_total, const int size)
+void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -67,9 +47,8 @@ void kernel_base(raft::device_span<const T> buffer, raft::device_span<T> block_t
     if (tid==0) block_total[blockIdx.x]=sdata[0];
 }
 
-template <typename T>
 __global__
-void kernel_less_warp_divergence(raft::device_span<const T> buffer, raft::device_span<T> block_total, const int size)
+void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -95,9 +74,8 @@ void kernel_less_warp_divergence(raft::device_span<const T> buffer, raft::device
     if (tid==0) block_total[blockIdx.x]=sdata[0];
 }
 
-template <typename T>
 __global__
-void kernel_no_bank_conflict(raft::device_span<const T> buffer, raft::device_span<T> block_total, const int size)
+void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -122,9 +100,8 @@ void kernel_no_bank_conflict(raft::device_span<const T> buffer, raft::device_spa
     if (tid==0) block_total[blockIdx.x]=sdata[0];
 }
 
-template <typename T>
 __global__
-void kernel_more_work_per_thread(raft::device_span<const T> buffer, raft::device_span<T> block_total, const int size)
+void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -160,9 +137,8 @@ __device__ void warp_reduce(int* sdata, int tid) {
     sdata[tid] += sdata[tid + 1];   __syncthreads();
 }
 
-template <typename T>
 __global__
-void kernel_unroll_last_warp(raft::device_span<const T> buffer, raft::device_span<T> block_total, const int size)
+void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -186,15 +162,16 @@ void kernel_unroll_last_warp(raft::device_span<const T> buffer, raft::device_spa
         __syncthreads();
     }
 
-    warp_reduce(sdata, tid);
+    if (tid<32) warp_reduce(sdata, tid);
 
     if (tid==0) block_total[blockIdx.x]=sdata[0];
 }
 
-template <typename KernelFunc, typename T>
+
+template <typename KernelFunc>
 void reduce_template( KernelFunc kernel,
-                 rmm::device_uvector<T>& buffer,
-                 rmm::device_scalar<T>& total)
+                 rmm::device_uvector<int>& buffer,
+                 rmm::device_scalar<int>& total)
 {
     int size = buffer.size();
 
@@ -205,8 +182,8 @@ void reduce_template( KernelFunc kernel,
     unsigned int NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
 
     //Intermediate arrays to store intermediate reduce result, 2 to avoid race condition
-    rmm::device_uvector<T> block_total_in(NBLOCKS, buffer.stream());
-    rmm::device_uvector<T> block_total_out(NBLOCKS, buffer.stream());
+    rmm::device_uvector<int> block_total_in(NBLOCKS, buffer.stream());
+    rmm::device_uvector<int> block_total_out(NBLOCKS, buffer.stream());
 
     //Bool that checks if we have done at least one cascade.
     bool first_done = false;
@@ -262,25 +239,26 @@ void reduce_template( KernelFunc kernel,
 
 void base(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total){
-    reduce_template(kernel_base<int>,buffer, total);
+    reduce_template(kernel_base,buffer, total);
 }
 
 void less_warp_divergence(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
-    reduce_template(kernel_less_warp_divergence<int>,buffer, total);
+    reduce_template(kernel_less_warp_divergence,buffer, total);
 }
 
 void no_bank_conflict(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
-    reduce_template(kernel_no_bank_conflict<int>,buffer, total);
+    reduce_template(kernel_no_bank_conflict,buffer, total);
 }
 
 void more_work_per_thread(rmm::device_uvector<int>& buffer,
             rmm::device_scalar<int>& total){
-     reduce_template(kernel_more_work_per_thread<int>,buffer, total);
+     reduce_template(kernel_more_work_per_thread,buffer, total);
 }
 
 void unroll_last_warp(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
-    reduce_template(kernel_unroll_last_warp<int>, buffer, total);
+    reduce_template(kernel_unroll_last_warp, buffer, total);
 }
+
