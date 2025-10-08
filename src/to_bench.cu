@@ -116,6 +116,7 @@ void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::devi
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
+    //We load two values now, so divide NBLOCK by 2 (less_factor=2)
     sdata[tid] = (i < size) ? buffer[i]:0;
     sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
     __syncthreads();
@@ -156,6 +157,7 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
+    //We load two values now, so divide NBLOCK by 2 (less_factor=2)
     sdata[tid] = (i < size) ? buffer[i]:0;
     sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
     __syncthreads();
@@ -188,6 +190,7 @@ void kernel_unroll_everything(raft::device_span<const int> buffer, raft::device_
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
+    //We load two values now, so divide NBLOCK by 2 (less_factor=2)
     sdata[tid] = (i < size) ? buffer[i]:0;
     sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
     __syncthreads();
@@ -225,7 +228,6 @@ void kernel_unroll_everything(raft::device_span<const int> buffer, raft::device_
 __global__
 void kernel_cascading(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-     //This one I don't get
 
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
@@ -241,9 +243,9 @@ void kernel_cascading(raft::device_span<const int> buffer, raft::device_span<int
     //we use the input size and not buffer.size() as our intermediate buffer is too large
     sdata[tid] = 0;
 
+    //We load any arbitrary number of values now, but at least 2, less_factor has to be >=2
     while (i < size){
-        sdata[tid] = (i < size) ? buffer[i]:0;
-        sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
+        sdata[tid] += buffer[i]+ ((i+blockDim.x < size) ? buffer[i+blockDim.x]:0);
         i += gridSize;
     }
 
@@ -281,8 +283,14 @@ void kernel_cascading(raft::device_span<const int> buffer, raft::device_span<int
 template <typename KernelFunc>
 void reduce_template( KernelFunc kernel,
                  rmm::device_uvector<int>& buffer,
-                 rmm::device_scalar<int>& total)
+                 rmm::device_scalar<int>& total,
+                 const int less_block=1)
 {
+    //Last argument less_block is the reduction factor of the number of blocks.
+    //Base value is 1
+    //It's has to be two starting with "more work per threads"
+    //And can be more starting with "algo cascading"
+
     int size = buffer.size();
 
     assert(BLOCK_SIZE<=1024);
@@ -291,7 +299,7 @@ void reduce_template( KernelFunc kernel,
     assert((BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0); 
 
     //Number of blocks to touch the whole array
-    unsigned int NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
+    unsigned int NBLOCKS=(size+BLOCK_SIZE*less_block-1)/(BLOCK_SIZE*less_block);
 
     //Intermediate arrays to store intermediate reduce result, 2 to avoid race condition
     rmm::device_uvector<int> result_per_block_in(NBLOCKS, buffer.stream());
@@ -314,7 +322,7 @@ void reduce_template( KernelFunc kernel,
         //The new amount of element to reduce is NBLOCK
         size = NBLOCKS;
         //We compute the new amount of blocks that we need
-        NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
+        NBLOCKS=(size+BLOCK_SIZE*less_block-1)/(BLOCK_SIZE*less_block);
 
         //We have done at least one pass
         first_done = true;
@@ -357,21 +365,24 @@ void no_bank_conflict(rmm::device_uvector<int>& buffer,
 
 void more_work_per_thread(rmm::device_uvector<int>& buffer,
             rmm::device_scalar<int>& total){
-     reduce_template(kernel_more_work_per_thread,buffer, total);
+     reduce_template(kernel_more_work_per_thread,buffer, total, 2);
+    //Last argument is the reduction factor of the number of blocks
+    //It's two since each block does twice the job
 }
 
 void unroll_last_warp(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
-    reduce_template(kernel_unroll_last_warp, buffer, total);
+    reduce_template(kernel_unroll_last_warp, buffer, total, 2);
 }
 
 void unroll_everything(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
-    reduce_template(kernel_unroll_everything, buffer, total);
+    reduce_template(kernel_unroll_everything, buffer, total, 2);
 }
 
- //This one I don't get
 void cascading(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
-    reduce_template(kernel_cascading, buffer, total);
+    reduce_template(kernel_cascading, buffer, total, 8);
+    //Last argument is the reduction factor of the number of blocks
+    //It's a free parameter now, but has to be >=2 because our algo assumes so
 }

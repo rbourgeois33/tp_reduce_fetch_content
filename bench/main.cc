@@ -62,20 +62,20 @@ int main(int argc, char** argv)
         constexpr std::tuple reduce_to_bench{
             //"baseline_reduce",
             //&baseline_reduce,
-            // "base",
-            // &base,
-            // "less_warp_divergence",
-            // &less_warp_divergence,
-            // "no_bank_conflict",
-            // &no_bank_conflict,
-            //"more_work_per_thread",
-            // &more_work_per_thread, 
-            //"unroll_last_warp",
-            //&unroll_last_warp,
-            //"unroll_everything",
-            //&unroll_everything,
-            "cascading", //This one I don't get
-            &cascading,  //This one I don't get
+            "base",
+            &base,
+            "less_warp_divergence",
+            &less_warp_divergence,
+            "no_bank_conflict",
+            &no_bank_conflict,
+            "more_work_per_thread",
+            &more_work_per_thread, 
+            "unroll_last_warp",
+            &unroll_last_warp,
+            "unroll_everything",
+            &unroll_everything,
+            "cascading",
+            &cascading,
         };
 
         //  / 2 because we store name + function pointer
