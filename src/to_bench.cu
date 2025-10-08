@@ -22,14 +22,14 @@ __global__ void kernel_print(raft::device_span<int> buffer, int size)
 __global__
 void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-    extern __shared__ int sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
-
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
     assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -49,14 +49,15 @@ void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> res
 __global__
 void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-    extern __shared__ int sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
 
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
     assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -77,14 +78,14 @@ void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::devi
 __global__
 void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-    extern __shared__ int sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
-
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
     assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -104,14 +105,14 @@ void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_s
 __global__
 void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-    extern __shared__ int sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
-
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
     assert(blockDim.x>=WARP_SIZE);
+    
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -144,14 +145,14 @@ __device__ void warp_reduce(int* sdata, int tid) {
 __global__
 void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-    extern __shared__ int sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
-
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
     assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -176,14 +177,14 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
 __global__
 void kernel_unroll_everything(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-    extern __shared__ int sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
-
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
     assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -220,6 +221,62 @@ void kernel_unroll_everything(raft::device_span<const int> buffer, raft::device_
     if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
+
+__global__
+void kernel_cascading(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
+{
+     //This one I don't get
+
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
+    unsigned int gridSize = BLOCK_SIZE*2*gridDim.x;
+
+    //Check if tid is out of bound. If it is, fill with 0's to not change resut.
+    //we use the input size and not buffer.size() as our intermediate buffer is too large
+    sdata[tid] = 0;
+
+    while (i < size){
+        sdata[tid] = (i < size) ? buffer[i]:0;
+        sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
+        i += gridSize;
+    }
+
+    __syncthreads();
+
+    if constexpr (BLOCK_SIZE >= 512){
+        if (tid < 256){
+            assert((tid+256<blockDim.x));
+            sdata[tid] += sdata[tid + 256];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 256){
+        if (tid < 128){
+            assert((tid+128<blockDim.x));
+            sdata[tid] += sdata[tid + 128];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 128){
+        if (tid < 64){
+            assert((tid+64<blockDim.x));
+            sdata[tid] += sdata[tid + 64];
+            __syncthreads();
+        }
+    }
+
+    if (tid<WARP_SIZE) warp_reduce(sdata, tid);
+
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
+}
 
 template <typename KernelFunc>
 void reduce_template( KernelFunc kernel,
@@ -311,4 +368,10 @@ void unroll_last_warp(rmm::device_uvector<int>& buffer,
 void unroll_everything(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
     reduce_template(kernel_unroll_everything, buffer, total);
+}
+
+ //This one I don't get
+void cascading(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_template(kernel_cascading, buffer, total);
 }

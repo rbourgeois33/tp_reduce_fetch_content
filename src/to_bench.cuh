@@ -23,3 +23,6 @@ void unroll_last_warp(rmm::device_uvector<int>& buffer,
 
 void unroll_everything(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
+
+void cascading(rmm::device_uvector<int>& buffer,
+          rmm::device_scalar<int>& total);

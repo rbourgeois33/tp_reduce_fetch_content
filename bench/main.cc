@@ -70,10 +70,12 @@ int main(int argc, char** argv)
             // &no_bank_conflict,
             //"more_work_per_thread",
             // &more_work_per_thread, 
-            "unroll_last_warp",
-            &unroll_last_warp,
+            //"unroll_last_warp",
+            //&unroll_last_warp,
             //"unroll_everything",
             //&unroll_everything,
+            "cascading", //This one I don't get
+            &cascading,  //This one I don't get
         };
 
         //  / 2 because we store name + function pointer
