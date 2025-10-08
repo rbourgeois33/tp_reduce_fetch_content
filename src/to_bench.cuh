@@ -29,3 +29,6 @@ void cascading(rmm::device_uvector<int>& buffer,
 
 void better_warp_reduce(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
+
+void atomics(rmm::device_uvector<int>& buffer,
+          rmm::device_scalar<int>& total);

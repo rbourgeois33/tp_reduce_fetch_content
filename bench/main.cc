@@ -76,8 +76,10 @@ int main(int argc, char** argv)
             // &unroll_everything,
             // "cascading",
             // &cascading,
-            "better_warp_reduce",
-            &better_warp_reduce,
+            //"better_warp_reduce",
+            //&better_warp_reduce,
+            "atomics",
+            &atomics,
         };
 
         //  / 2 because we store name + function pointer

@@ -6,6 +6,7 @@
 
 #include <rmm/device_uvector.hpp>
 #include <rmm/device_scalar.hpp>
+#include <cuda/atomic>
 
 //Block size for the reductions
 constexpr unsigned int BLOCK_SIZE = 256;
@@ -18,6 +19,8 @@ __global__ void kernel_print(raft::device_span<int> buffer, int size)
     if (tid > size) return;
     printf("i = %u, value = %d\n", tid, static_cast<int>(buffer[tid]));
 }
+
+//Optim 1-8 below
 
 __global__
 void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
@@ -423,6 +426,131 @@ void reduce_template( KernelFunc kernel,
     CUDA_CHECK_ERROR(cudaStreamSynchronize(buffer.stream()));
 }
 
+
+
+
+
+
+
+
+
+//Below, optim 8 and beyond
+
+
+
+
+
+
+
+
+
+__global__
+void kernel_atomics(raft::device_span<const int> buffer, raft::device_span<int> total, const int size)
+{
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
+    unsigned int gridSize = BLOCK_SIZE*2*gridDim.x;
+
+    //Check if tid is out of bound. If it is, fill with 0's to not change resut.
+    //we use the input size and not buffer.size() as our intermediate buffer is too large
+    sdata[tid] = 0;
+
+    //We load any arbitrary number of values now, but at least 2, less_factor has to be >=2
+    while (i < size){
+        sdata[tid] += buffer[i]+ ((i+blockDim.x < size) ? buffer[i+blockDim.x]:0);
+        i += gridSize;
+    }
+
+    __syncthreads();
+
+    if constexpr (BLOCK_SIZE >= 512){
+        if (tid < 256){
+            assert((tid+256<blockDim.x));
+            sdata[tid] += sdata[tid + 256];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 256){
+        if (tid < 128){
+            assert((tid+128<blockDim.x));
+            sdata[tid] += sdata[tid + 128];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 128){
+        if (tid < 64){
+            assert((tid+64<blockDim.x));
+            sdata[tid] += sdata[tid + 64];
+            __syncthreads();
+        }
+    }
+
+    //We need to add this since the better warp reduce does, well the warp reduction
+    if constexpr (BLOCK_SIZE >= 64){
+        if (tid < 32){
+            assert((tid+32<blockDim.x));
+            sdata[tid] += sdata[tid + 32];
+            __syncthreads();
+        }
+    }
+
+
+    sdata[tid] = better_warp_reduce(sdata[tid]);
+    
+    //Device sync
+    cuda::atomic_ref<int, cuda::thread_scope_device> ref(*total.data());
+
+    if (tid==0) ref.fetch_add(sdata[0], cuda::memory_order_relaxed);
+
+}
+
+template <typename KernelFunc>
+void reduce_atomics_template( KernelFunc kernel,
+                 rmm::device_uvector<int>& buffer,
+                 rmm::device_scalar<int>& total,
+                 const int less_block=1)
+{
+    //Last argument less_block is the reduction factor of the number of blocks.
+    //Base value is 1
+    //It's has to be two starting with "more work per threads"
+    //And can be more starting with "algo cascading"
+
+    int size = buffer.size();
+
+    assert(BLOCK_SIZE<=1024);
+    assert(BLOCK_SIZE%WARP_SIZE==0);
+    assert(BLOCK_SIZE>=WARP_SIZE);
+    assert((BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0); 
+
+    //Number of blocks to touch the whole array
+    unsigned int NBLOCKS=(size+BLOCK_SIZE*less_block-1)/(BLOCK_SIZE*less_block);
+
+    kernel<<<NBLOCKS, BLOCK_SIZE, BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
+            raft::device_span<const int>(buffer.data(), buffer.size()),
+            raft::device_span<int>(total.data(), 1),
+            size);
+
+    CUDA_CHECK_ERROR(cudaPeekAtLastError());
+    CUDA_CHECK_ERROR(cudaStreamSynchronize(buffer.stream()));
+}
+
+
+
+
+//Declarations
+
+
+
+
+
 void base(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total){
     reduce_template(kernel_base,buffer, total);
@@ -467,4 +595,9 @@ void better_warp_reduce(rmm::device_uvector<int>& buffer,
     reduce_template(kernel_better_warp_reduce, buffer, total, 8);
     //Last argument is the reduction factor of the number of blocks
     //It's a free parameter now, but has to be >=2 because our algo assumes so
+}
+
+void atomics(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_atomics_template(kernel_atomics, buffer, total, 8);
 }
