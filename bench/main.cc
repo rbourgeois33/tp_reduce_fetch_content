@@ -50,7 +50,11 @@ int main(int argc, char** argv)
             1048576*2,
             1048576*3,
             1048576*4,
-            1048576*5,
+            1048576*10,
+            1048576*100,
+            1048576*1003,
+            1048576*2000,
+
         };
 
         // Add the name and function to benchmark here

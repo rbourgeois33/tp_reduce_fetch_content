@@ -7,10 +7,8 @@
 #include <rmm/device_uvector.hpp>
 #include <rmm/device_scalar.hpp>
 
-//Block size for the first reduction loop
+//Block size for the reductions
 constexpr unsigned int BLOCK_SIZE = 256;
-//We stop the cascade when whe have BLOCK_SIZE elements left or less
-const unsigned int MAX_SIZE_LAST_REDUCE = BLOCK_SIZE;
 //For clarity
 constexpr unsigned int WARP_SIZE = 32;
 
@@ -154,7 +152,7 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
     sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
     __syncthreads();
 
-    for (int s=blockDim.x/2; s>32; s>>=1){
+    for (int s=blockDim.x/2; s>WARP_SIZE; s>>=1){
         if (tid<s){
             assert((tid+s<blockDim.x)); // Check not out of bound
             sdata[tid] += sdata[tid+s];
@@ -162,7 +160,7 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
         __syncthreads();
     }
 
-    if (tid<32) warp_reduce(sdata, tid);
+    if (tid<WARP_SIZE) warp_reduce(sdata, tid);
 
     if (tid==0) block_total[blockIdx.x]=sdata[0];
 }
@@ -177,6 +175,7 @@ void reduce_template( KernelFunc kernel,
 
     assert(BLOCK_SIZE<=1024);
     assert(BLOCK_SIZE%WARP_SIZE==0);
+    assert((BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0); 
 
     //Number of blocks to touch the whole array
     unsigned int NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
@@ -188,8 +187,8 @@ void reduce_template( KernelFunc kernel,
     //Bool that checks if we have done at least one cascade.
     bool first_done = false;
 
-    // While the amount of element to reduce (size) is > to the max size of the last reduction
-    while (size > MAX_SIZE_LAST_REDUCE){
+    //We stop the cascade when he have BLOCK_SIZE elements left or less
+    while (size > BLOCK_SIZE){
 
         //We perform a reduction and get one value per block
         //First argument (input of the reduction) is buffer for the first pass, else it's block_total_in
@@ -212,23 +211,14 @@ void reduce_template( KernelFunc kernel,
     }
 
     assert(size<=1024); 
-    assert(size<=MAX_SIZE_LAST_REDUCE); 
+    assert(size<=BLOCK_SIZE); 
 
     //if (buffer.size()==513) kernel_print<<<1,size>>>(raft::device_span<int>(block_total_in.data(), block_total_in.size()), size);
 
-    //Le dessin marche que si la taille de bloc est une puissance de 2. On veut la puissance de 2 la plus petite qui est > size
-    //On démarre à 32 (plus petit warp)
-    unsigned int block_size_last_reduce = 64;
-    while (block_size_last_reduce < size) block_size_last_reduce*=2;
-    
-    assert(block_size_last_reduce<=1024); //Pas plus gros que max
-    assert(block_size_last_reduce<=MAX_SIZE_LAST_REDUCE); //Pas plus gros que la taille max qu'on s'est fixés
-    assert((block_size_last_reduce & (block_size_last_reduce - 1)) == 0); //Puissance de 2
-
-    //We launch 1 block of size block_size_last_reduce
-    //We check if we performed one cascade, because if we did not, we need to input buffer, not block_total_in 
-    //the last output of the cascade
-    kernel<<<1, block_size_last_reduce, block_size_last_reduce*sizeof(int), buffer.stream()>>>(
+    //We launch 1 block of size BLOCK_SIZE
+    //Not size because the drawing works only is the block size is a power of 2
+    //We check if we performed one cascade, because if we did not, we need to input buffer, not block_total_in the last output of the cascade
+    kernel<<<1, BLOCK_SIZE, BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
         raft::device_span<int>(first_done ? block_total_in.data():buffer.data(), first_done ? block_total_in.size():buffer.size()),
         raft::device_span<int>(total.data(), 1),
         size);
