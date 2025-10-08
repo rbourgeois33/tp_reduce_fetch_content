@@ -20,7 +20,7 @@ __global__ void kernel_print(raft::device_span<int> buffer, int size)
 }
 
 __global__
-void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
+void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -29,6 +29,7 @@ void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> blo
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -42,11 +43,11 @@ void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> blo
         }
         __syncthreads();
     }
-    if (tid==0) block_total[blockIdx.x]=sdata[0];
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
 __global__
-void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
+void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -55,6 +56,7 @@ void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::devi
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -69,11 +71,11 @@ void kernel_less_warp_divergence(raft::device_span<const int> buffer, raft::devi
         }
         __syncthreads();
     }
-    if (tid==0) block_total[blockIdx.x]=sdata[0];
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
 __global__
-void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
+void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -82,6 +84,7 @@ void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_s
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -95,11 +98,11 @@ void kernel_no_bank_conflict(raft::device_span<const int> buffer, raft::device_s
         }
         __syncthreads();
     }
-    if (tid==0) block_total[blockIdx.x]=sdata[0];
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
 __global__
-void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
+void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -108,6 +111,7 @@ void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::devi
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -122,21 +126,23 @@ void kernel_more_work_per_thread(raft::device_span<const int> buffer, raft::devi
         }
         __syncthreads();
     }
-    if (tid==0) block_total[blockIdx.x]=sdata[0];
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
 __device__ void warp_reduce(int* sdata, int tid) {
     
-    sdata[tid] += sdata[tid + 32];  __syncthreads();
-    sdata[tid] += sdata[tid + 16];  __syncthreads();
-    sdata[tid] += sdata[tid + 8];   __syncthreads();
-    sdata[tid] += sdata[tid + 4];   __syncthreads();
-    sdata[tid] += sdata[tid + 2];   __syncthreads();
-    sdata[tid] += sdata[tid + 1];   __syncthreads();
+    //Corner case to be careful about: si la block size c'est 32, on veut pas faire le s=32 (car s=16 !!!)
+    if constexpr(BLOCK_SIZE>32) {if (tid<32) {sdata[tid] += sdata[tid + 32];  __syncwarp();}}
+
+    if (tid<16) {sdata[tid] += sdata[tid + 16];  __syncwarp();}
+    if (tid<8) {sdata[tid] += sdata[tid + 8];  __syncwarp();}
+    if (tid<4) {sdata[tid] += sdata[tid + 4];  __syncwarp();}
+    if (tid<2) {sdata[tid] += sdata[tid + 2];  __syncwarp();}
+    if (tid<1) {sdata[tid] += sdata[tid + 1];  __syncwarp();}
 }
 
 __global__
-void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_span<int> block_total, const int size)
+void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
     extern __shared__ int sdata[];
     unsigned int tid = threadIdx.x;
@@ -145,6 +151,7 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
 
     //Check if tid is out of bound. If it is, fill with 0's to not change resut.
     //we use the input size and not buffer.size() as our intermediate buffer is too large
@@ -152,7 +159,7 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
     sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
     __syncthreads();
 
-    for (int s=blockDim.x/2; s>WARP_SIZE; s>>=1){
+    for (int s=blockDim.x/2; s>32; s>>=1){
         if (tid<s){
             assert((tid+s<blockDim.x)); // Check not out of bound
             sdata[tid] += sdata[tid+s];
@@ -160,9 +167,57 @@ void kernel_unroll_last_warp(raft::device_span<const int> buffer, raft::device_s
         __syncthreads();
     }
 
+    warp_reduce(sdata, tid);
+
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
+}
+
+
+__global__
+void kernel_unroll_everything(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
+{
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
+
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    //Check if tid is out of bound. If it is, fill with 0's to not change resut.
+    //we use the input size and not buffer.size() as our intermediate buffer is too large
+    sdata[tid] = (i < size) ? buffer[i]:0;
+    sdata[tid] += (i+blockDim.x < size) ? buffer[i+blockDim.x]:0;
+    __syncthreads();
+
+    if constexpr (BLOCK_SIZE >= 512){
+        if (tid < 256){
+            assert((tid+256<blockDim.x));
+            sdata[tid] += sdata[tid + 256];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 256){
+        if (tid < 128){
+            assert((tid+128<blockDim.x));
+            sdata[tid] += sdata[tid + 128];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 128){
+        if (tid < 64){
+            assert((tid+64<blockDim.x));
+            sdata[tid] += sdata[tid + 64];
+            __syncthreads();
+        }
+    }
+
     if (tid<WARP_SIZE) warp_reduce(sdata, tid);
 
-    if (tid==0) block_total[blockIdx.x]=sdata[0];
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
 
@@ -175,14 +230,15 @@ void reduce_template( KernelFunc kernel,
 
     assert(BLOCK_SIZE<=1024);
     assert(BLOCK_SIZE%WARP_SIZE==0);
+    assert(BLOCK_SIZE>=WARP_SIZE);
     assert((BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0); 
 
     //Number of blocks to touch the whole array
     unsigned int NBLOCKS=(size+BLOCK_SIZE-1)/BLOCK_SIZE;
 
     //Intermediate arrays to store intermediate reduce result, 2 to avoid race condition
-    rmm::device_uvector<int> block_total_in(NBLOCKS, buffer.stream());
-    rmm::device_uvector<int> block_total_out(NBLOCKS, buffer.stream());
+    rmm::device_uvector<int> result_per_block_in(NBLOCKS, buffer.stream());
+    rmm::device_uvector<int> result_per_block_out(NBLOCKS, buffer.stream());
 
     //Bool that checks if we have done at least one cascade.
     bool first_done = false;
@@ -191,11 +247,11 @@ void reduce_template( KernelFunc kernel,
     while (size > BLOCK_SIZE){
 
         //We perform a reduction and get one value per block
-        //First argument (input of the reduction) is buffer for the first pass, else it's block_total_in
-        //Second argument (output) is always block_total_out
+        //First argument (input of the reduction) is buffer for the first pass, else it's result_per_block_in
+        //Second argument (output) is always result_per_block_out
         kernel<<<NBLOCKS, BLOCK_SIZE, BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
-            raft::device_span<const int>((first_done) ? block_total_in.data():buffer.data(), (first_done) ? block_total_in.size():buffer.size()),
-            raft::device_span<int>(block_total_out.data(), block_total_out.size()),
+            raft::device_span<const int>((first_done) ? result_per_block_in.data():buffer.data(), (first_done) ? result_per_block_in.size():buffer.size()),
+            raft::device_span<int>(result_per_block_out.data(), result_per_block_out.size()),
             size);
         
         //The new amount of element to reduce is NBLOCK
@@ -207,19 +263,19 @@ void reduce_template( KernelFunc kernel,
         first_done = true;
         
         //Input becomes output to avoid race condition
-        std::swap(block_total_out, block_total_in);
+        std::swap(result_per_block_out, result_per_block_in);
     }
 
     assert(size<=1024); 
     assert(size<=BLOCK_SIZE); 
 
-    //if (buffer.size()==513) kernel_print<<<1,size>>>(raft::device_span<int>(block_total_in.data(), block_total_in.size()), size);
+    //if (buffer.size()==513) kernel_print<<<1,size>>>(raft::device_span<int>(result_per_block_in.data(), result_per_block_in.size()), size);
 
     //We launch 1 block of size BLOCK_SIZE
     //Not size because the drawing works only is the block size is a power of 2
-    //We check if we performed one cascade, because if we did not, we need to input buffer, not block_total_in the last output of the cascade
+    //We check if we performed one cascade, because if we did not, we need to input buffer, not result_per_block_in the last output of the cascade
     kernel<<<1, BLOCK_SIZE, BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
-        raft::device_span<int>(first_done ? block_total_in.data():buffer.data(), first_done ? block_total_in.size():buffer.size()),
+        raft::device_span<int>(first_done ? result_per_block_in.data():buffer.data(), first_done ? result_per_block_in.size():buffer.size()),
         raft::device_span<int>(total.data(), 1),
         size);
 
@@ -252,3 +308,7 @@ void unroll_last_warp(rmm::device_uvector<int>& buffer,
     reduce_template(kernel_unroll_last_warp, buffer, total);
 }
 
+void unroll_everything(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_template(kernel_unroll_everything, buffer, total);
+}
