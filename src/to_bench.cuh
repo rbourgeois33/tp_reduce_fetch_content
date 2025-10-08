@@ -32,3 +32,6 @@ void better_warp_reduce(rmm::device_uvector<int>& buffer,
 
 void atomics(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
+
+void no_shared(rmm::device_uvector<int>& buffer,
+    rmm::device_scalar<int>& total);

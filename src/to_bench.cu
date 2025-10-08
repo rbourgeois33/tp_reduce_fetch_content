@@ -512,11 +512,39 @@ void kernel_atomics(raft::device_span<const int> buffer, raft::device_span<int> 
 
 }
 
+__global__
+void kernel_no_shared(raft::device_span<const int> buffer, raft::device_span<int> total, const int size)
+{
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
+    unsigned int gridSize = BLOCK_SIZE*2*gridDim.x;
+
+    //We load any arbitrary number of values now, but at least 2, less_factor has to be >=2
+    int sum = 0;
+    while (i < size){
+        sum += buffer[i]+ ((i+blockDim.x < size) ? buffer[i+blockDim.x]:0);
+        i += gridSize;
+    }
+
+    sum = better_warp_reduce(sum);
+    
+    //Device sync
+    cuda::atomic_ref<int, cuda::thread_scope_device> ref(*total.data());
+
+    if (tid % WARP_SIZE==0) ref.fetch_add(sum, cuda::memory_order_relaxed);
+}
+
 template <typename KernelFunc>
 void reduce_atomics_template( KernelFunc kernel,
                  rmm::device_uvector<int>& buffer,
                  rmm::device_scalar<int>& total,
-                 const int less_block=1)
+                 const int less_block=1,
+                 bool no_shared = false)
 {
     //Last argument less_block is the reduction factor of the number of blocks.
     //Base value is 1
@@ -533,7 +561,7 @@ void reduce_atomics_template( KernelFunc kernel,
     //Number of blocks to touch the whole array
     unsigned int NBLOCKS=(size+BLOCK_SIZE*less_block-1)/(BLOCK_SIZE*less_block);
 
-    kernel<<<NBLOCKS, BLOCK_SIZE, BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
+    kernel<<<NBLOCKS, BLOCK_SIZE, no_shared ? 0:BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
             raft::device_span<const int>(buffer.data(), buffer.size()),
             raft::device_span<int>(total.data(), 1),
             size);
@@ -600,4 +628,11 @@ void better_warp_reduce(rmm::device_uvector<int>& buffer,
 void atomics(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
     reduce_atomics_template(kernel_atomics, buffer, total, 8);
+}
+
+
+void no_shared(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_atomics_template(kernel_no_shared, buffer, total, 8, true);
+    //True for "no shared memory"
 }

@@ -78,8 +78,10 @@ int main(int argc, char** argv)
             // &cascading,
             //"better_warp_reduce",
             //&better_warp_reduce,
-            "atomics",
-            &atomics,
+            //"atomics",
+            //&atomics,
+            "no_shared",
+            &no_shared,
         };
 
         //  / 2 because we store name + function pointer
