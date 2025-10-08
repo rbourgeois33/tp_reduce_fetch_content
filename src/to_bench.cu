@@ -224,7 +224,6 @@ void kernel_unroll_everything(raft::device_span<const int> buffer, raft::device_
     if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
-
 __global__
 void kernel_cascading(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
@@ -276,6 +275,82 @@ void kernel_cascading(raft::device_span<const int> buffer, raft::device_span<int
     }
 
     if (tid<WARP_SIZE) warp_reduce(sdata, tid);
+
+    if (tid==0) result_per_block[blockIdx.x]=sdata[0];
+}
+
+
+inline __device__ int better_warp_reduce(int val) {
+    
+    #define FULL_MASK 0xffffffff
+    #pragma unroll
+    for (int offset = WARP_SIZE/2; offset > 0; offset /= 2)
+        val += __shfl_down_sync(~0, val, offset);
+    
+    return val;
+}
+
+
+__global__
+void kernel_better_warp_reduce(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
+{
+
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x*2+threadIdx.x;
+    unsigned int gridSize = BLOCK_SIZE*2*gridDim.x;
+
+    //Check if tid is out of bound. If it is, fill with 0's to not change resut.
+    //we use the input size and not buffer.size() as our intermediate buffer is too large
+    sdata[tid] = 0;
+
+    //We load any arbitrary number of values now, but at least 2, less_factor has to be >=2
+    while (i < size){
+        sdata[tid] += buffer[i]+ ((i+blockDim.x < size) ? buffer[i+blockDim.x]:0);
+        i += gridSize;
+    }
+
+    __syncthreads();
+
+    if constexpr (BLOCK_SIZE >= 512){
+        if (tid < 256){
+            assert((tid+256<blockDim.x));
+            sdata[tid] += sdata[tid + 256];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 256){
+        if (tid < 128){
+            assert((tid+128<blockDim.x));
+            sdata[tid] += sdata[tid + 128];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 128){
+        if (tid < 64){
+            assert((tid+64<blockDim.x));
+            sdata[tid] += sdata[tid + 64];
+            __syncthreads();
+        }
+    }
+
+    //We need to add this since the better warp reduce does, well the warp reduction
+    if constexpr (BLOCK_SIZE >= 64){
+        if (tid < 32){
+            assert((tid+32<blockDim.x));
+            sdata[tid] += sdata[tid + 32];
+            __syncthreads();
+        }
+    }
+
+    sdata[tid] = better_warp_reduce(sdata[tid]);
 
     if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
@@ -383,6 +458,13 @@ void unroll_everything(rmm::device_uvector<int>& buffer,
 void cascading(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
     reduce_template(kernel_cascading, buffer, total, 8);
+    //Last argument is the reduction factor of the number of blocks
+    //It's a free parameter now, but has to be >=2 because our algo assumes so
+}
+
+void better_warp_reduce(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_template(kernel_better_warp_reduce, buffer, total, 8);
     //Last argument is the reduction factor of the number of blocks
     //It's a free parameter now, but has to be >=2 because our algo assumes so
 }

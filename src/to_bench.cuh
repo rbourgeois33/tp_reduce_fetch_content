@@ -26,3 +26,6 @@ void unroll_everything(rmm::device_uvector<int>& buffer,
 
 void cascading(rmm::device_uvector<int>& buffer,
           rmm::device_scalar<int>& total);
+
+void better_warp_reduce(rmm::device_uvector<int>& buffer,
+          rmm::device_scalar<int>& total);
