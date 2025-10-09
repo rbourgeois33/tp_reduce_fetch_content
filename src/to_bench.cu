@@ -446,8 +446,10 @@ void reduce_template( KernelFunc kernel,
 
 
 __global__
-void kernel_atomics(raft::device_span<const int> buffer, raft::device_span<int> total, const int size)
+void kernel_atomics(raft::device_span<const int> buffer, raft::device_span<int> total, raft::device_span<int> DLB_counter, const int size)
 {
+    //DLB_counter Only used for deterministic
+
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
@@ -514,8 +516,10 @@ void kernel_atomics(raft::device_span<const int> buffer, raft::device_span<int> 
 }
 
 __global__
-void kernel_no_shared(raft::device_span<const int> buffer, raft::device_span<int> total, const int size)
+void kernel_no_shared(raft::device_span<const int> buffer, raft::device_span<int> total, raft::device_span<int> DLB_counter, const int size)
 {
+    //DLB_counter Only used for deterministic
+
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
@@ -541,8 +545,10 @@ void kernel_no_shared(raft::device_span<const int> buffer, raft::device_span<int
 }
 
 __global__
-void kernel_vectorized(raft::device_span<const int> buffer, raft::device_span<int> total, const int size)
+void kernel_vectorized(raft::device_span<const int> buffer, raft::device_span<int> total, raft::device_span<int> DLB_counter, const int size)
 {
+    //DLB_counter Only used for deterministic
+
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
@@ -570,6 +576,86 @@ void kernel_vectorized(raft::device_span<const int> buffer, raft::device_span<in
     if (tid % WARP_SIZE==0) ref.fetch_add(sum, cuda::memory_order_relaxed);
 }
 
+__global__
+void kernel_deterministic(raft::device_span<const int> buffer, raft::device_span<int> total, raft::device_span<int> DLB_counter, const int size)
+{
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    extern __shared__ int sdata[];
+    unsigned int tid = threadIdx.x;
+
+    // Declared in shared memory so all threads in the block can see it
+    __shared__ unsigned int DLB_blockIdx;
+
+    //Only thread 0 of the block reads and increment the global counter
+    if (tid==0){
+        cuda::atomic_ref<int, cuda::thread_scope_device> ref(*DLB_counter.data());
+        DLB_blockIdx = ref.fetch_add(1, cuda::memory_order_relaxed); //result is old value
+    }
+    //Ensure that DLB_blockIdx has the right value for all threads
+    __syncthreads();
+
+    unsigned int i = DLB_blockIdx*blockDim.x*2+threadIdx.x;
+    unsigned int gridSize = BLOCK_SIZE*2*gridDim.x;
+
+    //Check if tid is out of bound. If it is, fill with 0's to not change resut.
+    //we use the input size and not buffer.size() as our intermediate buffer is too large
+    sdata[tid] = 0;
+
+    //We load any arbitrary number of values now, but at least 2, less_factor has to be >=2
+    while (i < size){
+        sdata[tid] += buffer[i]+ ((i+blockDim.x < size) ? buffer[i+blockDim.x]:0);
+        i += gridSize;
+    }
+
+    __syncthreads();
+
+    if constexpr (BLOCK_SIZE >= 512){
+        if (tid < 256){
+            assert((tid+256<blockDim.x));
+            sdata[tid] += sdata[tid + 256];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 256){
+        if (tid < 128){
+            assert((tid+128<blockDim.x));
+            sdata[tid] += sdata[tid + 128];
+            __syncthreads();
+        }
+    }
+
+    if constexpr (BLOCK_SIZE >= 128){
+        if (tid < 64){
+            assert((tid+64<blockDim.x));
+            sdata[tid] += sdata[tid + 64];
+            __syncthreads();
+        }
+    }
+
+    //We need to add this since the better warp reduce does, well the warp reduction
+    if constexpr (BLOCK_SIZE >= 64){
+        if (tid < 32){
+            assert((tid+32<blockDim.x));
+            sdata[tid] += sdata[tid + 32];
+            __syncthreads();
+        }
+    }
+
+    sdata[tid] = better_warp_reduce(sdata[tid]);
+    
+    if (tid==0) {
+        //Device sync
+        cuda::atomic_ref<int, cuda::thread_scope_device> ref(*total.data());
+        ref.fetch_add(sdata[0], cuda::memory_order_relaxed);
+    }
+
+}
+
 
 //Kernel for optim 8-10
 template <typename KernelFunc>
@@ -577,7 +663,8 @@ void reduce_atomics_template( KernelFunc kernel,
                  rmm::device_uvector<int>& buffer,
                  rmm::device_scalar<int>& total,
                  int less_block=1,
-                 bool no_shared = false)
+                 bool no_shared = false,
+                 bool deterministic = true)
                  {
     //Last argument less_block is the reduction factor of the number of blocks.
     //Base value is 1
@@ -590,13 +677,18 @@ void reduce_atomics_template( KernelFunc kernel,
     assert(BLOCK_SIZE%WARP_SIZE==0);
     assert(BLOCK_SIZE>=WARP_SIZE);
     assert((BLOCK_SIZE & (BLOCK_SIZE - 1)) == 0); 
+    assert(not(no_shared && deterministic));//Deterministic algo needs shared
+    
+    rmm::device_scalar<int> DLB_counter(0, buffer.stream());
 
     //Number of blocks to touch the whole array
     unsigned int NBLOCKS=(size+BLOCK_SIZE*less_block-1)/(BLOCK_SIZE*less_block);
-
-    kernel<<<NBLOCKS, BLOCK_SIZE, no_shared ? 0:BLOCK_SIZE*sizeof(int), buffer.stream()>>>(
+    
+    // If deterministic add one int of shared memory for the blockIdx
+    kernel<<<NBLOCKS, BLOCK_SIZE, (no_shared ? 0:BLOCK_SIZE*sizeof(int)) + (deterministic ? sizeof(int):0), buffer.stream()>>>(
             raft::device_span<const int>(buffer.data(), buffer.size()),
             raft::device_span<int>(total.data(), 1),
+            raft::device_span<int>(DLB_counter.data(), 1),     //Only used for deterministic
             size);
 
     CUDA_CHECK_ERROR(cudaPeekAtLastError());
@@ -673,4 +765,10 @@ void vectorized(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
     reduce_atomics_template(kernel_vectorized, buffer, total, 16, true);
     //True for "no shared memory"
+}
+
+void deterministic(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_atomics_template(kernel_deterministic, buffer, total, 16, false, true);
+    //Last true is for "deterministic"
 }

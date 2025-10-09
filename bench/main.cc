@@ -24,7 +24,7 @@ int main(int argc, char** argv)
     {
         //Sizes to check correctness
         constexpr std::array sizes = {
-            31,
+            31, //All possible block sizes +/-1, includes small odd numbers
             32,
             33,
             63,
@@ -41,27 +41,30 @@ int main(int argc, char** argv)
             513,
             1023,
             1024,
-            1025, //Forced to cascade
-            1024*2, 
-            1024*3,
-            1024*1025,
-            1048576,
-            1048576*1,
-            1048576*2,
-            1048576*3,
-            1048576*4,
-            1048576*10,
-            1048576*100,
-            1048576*1003,
-            1048576*2000,
-
+            1025,
+            8, //Small even numbers that are not powers of two
+            34,
+            130,
+            260,
+            516,
+            1020,
+            1024*2, //Forced to cascade with the max block size
+            1024*3, //Forced to cascade with the max block size leading to an uneven amount of block
+            1024*1025, //Forced to cascade multiple times
+            1024*1024*1024-1, //Odd large number
+            1024*1024*1024+1, //Odd large number
+            1024*1024*1024, //Even large number that is a power of two
+            1024*1024*1024-2, //Even large number that is not a power of two
         };
+
+        //To bench
+        // constexpr std::array sizes = {
+        //     1024*1024*1024
+        // };
 
         // Add the name and function to benchmark here
         // TODO
         constexpr std::tuple reduce_to_bench{
-            //"baseline_reduce",
-            //&baseline_reduce,
             // "base",
             // &base,
             // "less_warp_divergence",
@@ -76,12 +79,16 @@ int main(int argc, char** argv)
             // &unroll_everything,
             // "cascading",
             // &cascading,
-            //"better_warp_reduce",
-            //&better_warp_reduce,
-            //"atomics",
-            //&atomics,
-            "no_shared",
-            &no_shared,
+            // "better_warp_reduce",
+            // &better_warp_reduce,
+            // "atomics",
+            // &atomics,
+            // "no_shared",
+            // &no_shared,
+            // "vectorized",
+            // &vectorized,
+            "deterministic",
+            &deterministic,
         };
 
         //  / 2 because we store name + function pointer

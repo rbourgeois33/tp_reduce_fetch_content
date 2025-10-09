@@ -38,3 +38,6 @@ void no_shared(rmm::device_uvector<int>& buffer,
 
 void vectorized(rmm::device_uvector<int>& buffer,
     rmm::device_scalar<int>& total);
+
+void deterministic(rmm::device_uvector<int>& buffer,
+    rmm::device_scalar<int>& total);
