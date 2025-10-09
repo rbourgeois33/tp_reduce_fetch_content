@@ -35,3 +35,6 @@ void atomics(rmm::device_uvector<int>& buffer,
 
 void no_shared(rmm::device_uvector<int>& buffer,
     rmm::device_scalar<int>& total);
+
+void vectorized(rmm::device_uvector<int>& buffer,
+    rmm::device_scalar<int>& total);

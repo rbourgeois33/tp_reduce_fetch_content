@@ -13,6 +13,7 @@ constexpr unsigned int BLOCK_SIZE = 256;
 //For clarity
 constexpr unsigned int WARP_SIZE = 32;
 
+//Util
 __global__ void kernel_print(raft::device_span<int> buffer, int size)
 {
     unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
@@ -20,7 +21,7 @@ __global__ void kernel_print(raft::device_span<int> buffer, int size)
     printf("i = %u, value = %d\n", tid, static_cast<int>(buffer[tid]));
 }
 
-//Optim 1-8 below
+//Optim 1-7 below
 
 __global__
 void kernel_base(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
@@ -297,7 +298,6 @@ inline __device__ int better_warp_reduce(int val) {
 __global__
 void kernel_better_warp_reduce(raft::device_span<const int> buffer, raft::device_span<int> result_per_block, const int size)
 {
-
     //Check that block size is a power of 2
     //Notre dessin marche que si c'est le cas
     assert((blockDim.x & (blockDim.x - 1)) == 0); 
@@ -358,6 +358,7 @@ void kernel_better_warp_reduce(raft::device_span<const int> buffer, raft::device
     if (tid==0) result_per_block[blockIdx.x]=sdata[0];
 }
 
+//Template for launching kernel 1-7
 template <typename KernelFunc>
 void reduce_template( KernelFunc kernel,
                  rmm::device_uvector<int>& buffer,
@@ -434,7 +435,7 @@ void reduce_template( KernelFunc kernel,
 
 
 
-//Below, optim 8 and beyond
+//Below, optim 8 and beyond, because another template is needed
 
 
 
@@ -539,13 +540,45 @@ void kernel_no_shared(raft::device_span<const int> buffer, raft::device_span<int
     if (tid % WARP_SIZE==0) ref.fetch_add(sum, cuda::memory_order_relaxed);
 }
 
+__global__
+void kernel_vectorized(raft::device_span<const int> buffer, raft::device_span<int> total, const int size)
+{
+    //Check that block size is a power of 2
+    //Notre dessin marche que si c'est le cas
+    assert((blockDim.x & (blockDim.x - 1)) == 0); 
+    assert(blockDim.x>=WARP_SIZE);
+
+    unsigned int tid = threadIdx.x;
+    unsigned int i = blockIdx.x*blockDim.x+threadIdx.x;
+    unsigned int gridSize = BLOCK_SIZE*gridDim.x;
+
+    int sum = 0;
+    int bound = (size+4-1)/4; //to not miss the end with vecto
+    while (i < bound){
+        const int4 val = reinterpret_cast<const int4*>(buffer.data())[i];
+        //safer out of bound check
+        const int I=4*i;
+        sum += ((I < size) ? val.x:0) + ((I+1 < size) ? val.y:0) + ((I+2 < size) ?val.z:0) + ((I+3 < size) ? val.w:0);
+        i += gridSize;
+    }
+
+    sum = better_warp_reduce(sum);
+    
+    //Device sync
+    cuda::atomic_ref<int, cuda::thread_scope_device> ref(*total.data());
+
+    if (tid % WARP_SIZE==0) ref.fetch_add(sum, cuda::memory_order_relaxed);
+}
+
+
+//Kernel for optim 8-10
 template <typename KernelFunc>
 void reduce_atomics_template( KernelFunc kernel,
                  rmm::device_uvector<int>& buffer,
                  rmm::device_scalar<int>& total,
-                 const int less_block=1,
+                 int less_block=1,
                  bool no_shared = false)
-{
+                 {
     //Last argument less_block is the reduction factor of the number of blocks.
     //Base value is 1
     //It's has to be two starting with "more work per threads"
@@ -630,9 +663,14 @@ void atomics(rmm::device_uvector<int>& buffer,
     reduce_atomics_template(kernel_atomics, buffer, total, 8);
 }
 
-
 void no_shared(rmm::device_uvector<int>& buffer,
            rmm::device_scalar<int>& total){
     reduce_atomics_template(kernel_no_shared, buffer, total, 8, true);
+    //True for "no shared memory"
+}
+
+void vectorized(rmm::device_uvector<int>& buffer,
+           rmm::device_scalar<int>& total){
+    reduce_atomics_template(kernel_vectorized, buffer, total, 16, true);
     //True for "no shared memory"
 }
